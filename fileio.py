@@ -15,10 +15,37 @@ def relabel(df,key,threshold=5):
 	# Merge with base data frame
 	df = pd.merge(df,
 				  pd.DataFrame({key:y.index,key+'cat':index}),
-				  how='inner',on=key,sort=False)
+				  how='left',on=key,sort=False)
 
 	# Impute missing values
 	df[key+'cat'] = df[key+'cat'].fillna(df[key][df.set == 0].mean())
+	return df
+
+def filterByLast(filename,grp=['f277'],amax='f521'):
+	""""""
+	df = pd.read_csv(filename,usecols=grp+['id',amax])
+	gf = df.groupby(grp).apply(lambda x: x.iloc[x[amax].argmax()])
+	gf = gf.rename(columns={amax:amax+'Last'})
+	df = pd.merge(df,gf.ix[:,['id',amax+'Last']],on='id',how='left',sort=False)
+	df = df.sort_index(by='id')
+	df[amax+'Last'] = df[amax+'Last'].fillna(0)
+	y = df[amax+'Last'].values.astype('float')
+	return (y - y.min())/(y.max() - y.min())
+
+def avgLoss(df,key,threshold=50):
+	"""
+	"""
+	df[key] = df[key].astype('float')
+	df[key] = df[key].fillna(df.loc[df.set==0].mean())
+	grp = df.loc[df.set==0].groupby(key)['loss']
+	x, y = grp.size(), grp.mean()
+	y[x < threshold] = np.mean(y[x > threshold])
+	df = pd.merge(df,
+				  pd.DataFrame({key:y.index,key+'avg':y}),
+				  how='left',on=key,sort=False)
+
+	# impute missing values
+	df[key+'avg'] = df[key+'avg'].fillna(df[key+'avg'][df.set == 0].mean())
 	return df
 
 class fileio(object):
@@ -76,26 +103,28 @@ class fileio(object):
 	def loadCategorical(self,catcols,loadTest=False):
 		"""
 		"""
-		df = pd.read_csv(self.trainfile,usecols=catcols+['id'])
+		df = pd.read_csv(self.trainfile,usecols=catcols+['id','loss'])
 		df['set'] = 0
 
 		if loadTest:
 			tf = pd.read_csv(self.testfile,usecols=catcols+['id'])
 			tf['set'] = 1
+			tf['loss'] = 0
 			df = df.append(tf,ignore_index=False)
 
 		relabeled = []
 		for c in catcols:
-			df[c] = df[c].fillna(cf[c].max()+1)
-			df = relabel(df,c)
-			relabeled.append(c+'cat')
+			df = avgLoss(df,c)
+			relabeled.append(c+'avg')
 			
 		df = df.sort_index(by='id')
 		train = df.loc[df.set == 0]
-		train = self.enc.fit_transform(train.ix[:,relabeled])
+		train = np.array(train.ix[:,relabeled])
+		#train = self.enc.fit_transform(train.ix[:,relabeled])
 		if loadTest:
 			test = df.loc[df.set == 1]
-			test = self.enc.transform(test.ix[:,relabeled])
+			test = np.array(test.ix[:,relabeled])
+			#test = self.enc.transform(test.ix[:,relabeled])
 		else:
 			test = None
 
