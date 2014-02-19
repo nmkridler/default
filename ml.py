@@ -52,7 +52,7 @@ class Cascaded(object):
 		""""""
 		return self.clf.predict_proba(X)
 
-def stratHoldout(X,y,clf,scoreFunc,scaleFactor=0.62,decisionThreshold=0.6,
+def stratHoldout(X,y,clf,scoreFunc,scaleFactor=0.6,decisionThreshold=0.2,
 	nFolds=10,fraction=0.2,seed=1337,verbose=True):
 	""""""
 	meanScore, i = 0., 1
@@ -65,6 +65,7 @@ def stratHoldout(X,y,clf,scoreFunc,scaleFactor=0.62,decisionThreshold=0.6,
 		yr = clf.predict(X[test,:])
 
 		y_ = yr*(yp > decisionThreshold)*scaleFactor
+		#y_ = (yp > decisionThreshold)*scaleFactor
 		y_[y_ < 0] = 0.
 		thisScore = scoreFunc(y[test],y_)
 		thisZero = scoreFunc(y[test],np.zeros(len(test)))
@@ -88,7 +89,7 @@ def stratHoldout(X,y,clf,scoreFunc,scaleFactor=0.62,decisionThreshold=0.6,
 		print "All Zero Average Score: %f"%(allZero/nFolds)
 	return meanScore/nFolds
 
-def stratHoldoutMix(X,Z,y,clf,scoreFunc,scaleFactor=0.6,decisionThreshold=0.4,
+def stratHoldoutMix(X,Z,y,clf,scoreFunc,scaleFactor=0.6,decisionThreshold=0.2,
 	nFolds=10,fraction=0.2,seed=1337,verbose=True):
 	""""""
 	meanScore, i = 0., 1
@@ -96,21 +97,28 @@ def stratHoldoutMix(X,Z,y,clf,scoreFunc,scaleFactor=0.6,decisionThreshold=0.4,
 	yTarget = 1*(y > 0)
 	sss = StratifiedShuffleSplit(yTarget,n_iter=nFolds,test_size=fraction,random_state=seed)
 	for train, test in sss:
-		clf.fit(X[train,:],y[train],thresh=decisionThreshold)
+		clf.clf.fit(X[train,:],(y[train] > 0))
+		yp = clf.clf.predict_proba(X[train])[:,1]
+		clf.rgr.fit(X[train[yp > 0.15],:],y[train[yp > 0.15]])
+
+		#clf.fit(X[train,:],y[train],thresh=decisionThreshold)
 		yp = clf.predict_proba(X[test,:])[:,1]
 		yr = clf.predict(X[test,:])
 		
-		clf.fit(Z[train,:],y[train],thresh=0.4,cutoff=40)
-		zp = clf.predict_proba(Z[test,:])[:,1]
-		zr = clf.predict(Z[test,:])
+		clf.clf.fit(X[train,:],y[train] > 0)
+		yp = clf.predict_proba(X[test,:])[:,1]
+
+		#clf.fit(Z[train,:],y[train],thresh=decisionThreshold)
+		#zp = clf.predict_proba(Z[test,:])[:,1]
+		#zr = clf.predict(Z[test,:])
 		y_ = yr*(yp > decisionThreshold)*scaleFactor
-		y_[(zp > 0.7) & (zr > 40)] = zr[(zp > 0.7) & (zr > 40)]
+		#y_[(zp > 0.7) & (zr > 40)] = zr[(zp > 0.7) & (zr > 40)]
 		y_[y_ < 0] = 0.
 		thisScore = scoreFunc(y[test],y_)
 		thisZero = scoreFunc(y[test],np.zeros(len(test)))
 		if verbose:
-			yp = clf.predict_proba(Z[test,:])[:,1]
-			fpr, tpr, thresh = roc_curve(y[test]>30,zp)
+			yp = clf.predict_proba(X[test,:])[:,1]
+			fpr, tpr, thresh = roc_curve(y[test]>0,yp)
 			print "AUC: %f"%auc(fpr,tpr)
 			print "Target Samples: %d"%np.sum(yTarget[test])
 			print "Error: %f (fold %d of %d)"%(thisScore,i,nFolds)
@@ -135,10 +143,10 @@ def stratKFold(X,y,clf,scoreFunc,nFolds=5,seed=1337,verbose=True):
 	yp, yr, y_ = np.empty(y.size), np.empty(y.size), np.empty(y.size)
 	meanScore, i = 0., 1
 	for train, test in kf:
-		clf.fit(X[train,:],y[train])
+		clf.clf.fit(X[train,:],y[train] > 0)
 		yp[test] = clf.predict_proba(X[test,:])[:,1]
-		yr[test] = clf.predict(X[test,:])
-		y_[test] = 0.6*yr[test]*(yp[test] > 0.5)
+		#yr[test] = clf.predict(X[test,:])
+		#y_[test] = 0.6*yr[test]*(yp[test] > 0.5)
 		thisScore = scoreFunc(y[test],y_[test])
 		if verbose:
 			print "Error: %f (fold %d of %d)"%(thisScore,i,nFolds)

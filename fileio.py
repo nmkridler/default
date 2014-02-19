@@ -58,7 +58,7 @@ class fileio(object):
 		self.trainfile = trainfile
 		self.testfile = testfile
 		self.enc = OneHotEncoder()
-		self.scale = MinMaxScaler()
+		self.scale = StandardScaler()
 		self.numAvg = {}
 
 	def loadLabels(self):
