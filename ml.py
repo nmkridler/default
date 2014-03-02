@@ -2,14 +2,14 @@ import numpy as np
 import pandas as pd
 import pylab as pl
 
-from sklearn.metrics import mean_absolute_error, roc_curve, auc, confusion_matrix
+from sklearn.metrics import mean_absolute_error, roc_curve, auc, confusion_matrix, f1_score
 from sklearn.cross_validation import KFold, StratifiedKFold, StratifiedShuffleSplit, train_test_split
 
 from multiprocessing import Pool
 
 INIT_PARAMS = {
 	"LogisticRegression": { 
-		'penalty':'l2', 'dual':True, 'tol':0.0001, 'C':1.0, 
+		'penalty':'l2', 'dual':False, 'tol':0.0001, 'C':.010, 
 		'fit_intercept':True, 'intercept_scaling':1.0, 
         'class_weight':None, 'random_state':1337
         },
@@ -18,13 +18,17 @@ INIT_PARAMS = {
 		'n_jobs':1,'verbose':True,'n_estimators':50,'random_state':1337
 		},
 	"SGDClassifier":{
-		'loss':'log','penalty':'l2','alpha':0.0001,'n_iter':20,
+		'loss':'log','penalty':'elasticnet','alpha':1.0,'n_iter':20,
 		'shuffle':True,'random_state':1337,'class_weight':None
 		},
 	"GradientBoostingClassifier":{'max_depth':8, 'subsample':0.5,
 		'verbose':2, 'random_state':1337,
 		'min_samples_split':100, 'min_samples_leaf':100, 'max_features':10,
-		'n_estimators': 125, 'learning_rate': 0.1}
+		'n_estimators': 125, 'learning_rate': 0.1},
+	"GradientBoostingRegressor":{'loss':'lad','subsample':0.5,
+          'max_depth':6,'min_samples_split':85,
+          'min_samples_leaf':85,'max_features':50,'learning_rate':0.05,
+          'n_estimators':500,'alpha':0.50,'random_state':1337}
 }
 
 
@@ -60,12 +64,12 @@ def stratHoldout(X,y,clf,scoreFunc,scaleFactor=0.6,decisionThreshold=0.2,
 	yTarget = 1*(y > 0)
 	sss = StratifiedShuffleSplit(yTarget,n_iter=nFolds,test_size=fraction,random_state=seed)
 	for train, test in sss:
-		clf.fit(X[train,:],y[train],thresh=decisionThreshold)
+		clf.fit(X[train,:],y[train],thresh=0.15)
 		yp = clf.predict_proba(X[test,:])[:,1]
 		yr = clf.predict(X[test,:])
 
-		y_ = yr*(yp > decisionThreshold)*scaleFactor
-		#y_ = (yp > decisionThreshold)*scaleFactor
+		#y_ = yr*(yp > decisionThreshold)*scaleFactor
+		y_ = (yp > decisionThreshold)*scaleFactor
 		y_[y_ < 0] = 0.
 		thisScore = scoreFunc(y[test],y_)
 		thisZero = scoreFunc(y[test],np.zeros(len(test)))
@@ -89,7 +93,7 @@ def stratHoldout(X,y,clf,scoreFunc,scaleFactor=0.6,decisionThreshold=0.2,
 		print "All Zero Average Score: %f"%(allZero/nFolds)
 	return meanScore/nFolds
 
-def stratHoldoutMix(X,Z,y,clf,scoreFunc,scaleFactor=0.6,decisionThreshold=0.2,
+def stratHoldout2Stage(X,Z,y,clf,rgr,scaleFactor=0.68,decisionThreshold=0.051846234761,
 	nFolds=10,fraction=0.2,seed=1337,verbose=True):
 	""""""
 	meanScore, i = 0., 1
@@ -97,49 +101,60 @@ def stratHoldoutMix(X,Z,y,clf,scoreFunc,scaleFactor=0.6,decisionThreshold=0.2,
 	yTarget = 1*(y > 0)
 	sss = StratifiedShuffleSplit(yTarget,n_iter=nFolds,test_size=fraction,random_state=seed)
 	for train, test in sss:
-		clf.clf.fit(X[train,:],(y[train] > 0))
-		yp = clf.clf.predict_proba(X[train])[:,1]
-		clf.rgr.fit(X[train[yp > 0.15],:],y[train[yp > 0.15]])
+		clf.fit(Z[train,:],y[train] > 3)
+		zp = clf.predict_proba(Z[train,:])[:,1]
+		yp = clf.predict_proba(Z[test,:])[:,1]
 
-		#clf.fit(X[train,:],y[train],thresh=decisionThreshold)
-		yp = clf.predict_proba(X[test,:])[:,1]
-		yr = clf.predict(X[test,:])
-		
-		clf.clf.fit(X[train,:],y[train] > 0)
-		yp = clf.predict_proba(X[test,:])[:,1]
+		rgr.fit(X[train[zp > decisionThreshold],:],y[train[zp > decisionThreshold]])
+		#rgr.fit(X[train[y[train] > 0],:],y[train[y[train] > 0]])
+		yr = rgr.predict(X[test,:])
+		yr[yr > 100] = 100.
+		yr[yr < 0] = 0.
 
-		#clf.fit(Z[train,:],y[train],thresh=decisionThreshold)
-		#zp = clf.predict_proba(Z[test,:])[:,1]
-		#zr = clf.predict(Z[test,:])
 		y_ = yr*(yp > decisionThreshold)*scaleFactor
-		#y_[(zp > 0.7) & (zr > 40)] = zr[(zp > 0.7) & (zr > 40)]
 		y_[y_ < 0] = 0.
-		thisScore = scoreFunc(y[test],y_)
-		thisZero = scoreFunc(y[test],np.zeros(len(test)))
+		thisScore = mean_absolute_error(y[test],y_)
 		if verbose:
-			yp = clf.predict_proba(X[test,:])[:,1]
-			fpr, tpr, thresh = roc_curve(y[test]>0,yp)
-			print "AUC: %f"%auc(fpr,tpr)
-			print "Target Samples: %d"%np.sum(yTarget[test])
 			print "Error: %f (fold %d of %d)"%(thisScore,i,nFolds)
-			print "All Zeros Score: %f"%(scoreFunc(y[test],np.zeros(len(test))))
-			#pl.plot(fpr,tpr,lw=2)
-			#pl.show()
-			#cm = confusion_matrix(yTarget[test],y_)
-			#print "Confusion Matrix: "
-			#print cm
 		meanScore += thisScore
-		allZero += thisZero
 		i += 1
 
-	if verbose:
-		print "All Zero Average Score: %f"%(allZero/nFolds)
 	return meanScore/nFolds
 
 
+def stratKFoldDF(X,y,clf,nFolds=5,seed=1337,verbose=True,cutoff=0):
+	""""""
+	kf = StratifiedKFold(y > cutoff,n_folds=nFolds)
+	yp, y_ = np.empty(y.size), np.empty(y.size)
+	meanScore, i = 0., 1
+	for train, test in kf:
+		clf.fit(X[train,:],y[train] > cutoff)
+		#yp[test] = clf.decision_function(X[test,:])
+		yp[test] = clf.predict_proba(X[test,:])[:,1]
+	
+	return yp
+
+def stratKFoldR(X,y,clf,frac=1.,nFolds=5,seed=1337,verbose=True):
+	""""""
+	kf = StratifiedKFold(y > 0,n_folds=nFolds)
+	yp, y_ = np.empty(y.size), np.empty(y.size)
+	np.random.seed(seed)
+	for train, test in kf:
+		i0, i1 = train[y[train] == 0], train[y[train] > 0]
+		numTrain = int(frac*len(i0))
+		if numTrain > 0:
+			np.random.shuffle(i0)
+			ind_ = np.concatenate((i0[:numTrain],i1))
+		else:
+			ind_ = i1.copy()
+		clf.fit(X[ind_,:],y[ind_])
+		yp[test] = clf.predict(X[test,:])
+	
+	return yp
+
 def stratKFold(X,y,clf,scoreFunc,nFolds=5,seed=1337,verbose=True):
 	""""""
-	kf = StratifiedKFold(y,n_folds=nFolds)
+	kf = StratifiedKFold(y > 0,n_folds=nFolds)
 	yp, yr, y_ = np.empty(y.size), np.empty(y.size), np.empty(y.size)
 	meanScore, i = 0., 1
 	for train, test in kf:
@@ -158,78 +173,6 @@ def stratKFold(X,y,clf,scoreFunc,nFolds=5,seed=1337,verbose=True):
 	yf.to_csv('base.csv')
 	return meanScore/nFolds
 
-def stratKFoldMix(X,Z,y,clf,scoreFunc,nFolds=5,seed=1337,verbose=True):
-	""""""
-	kf = StratifiedKFold(y,n_folds=nFolds)
-	yp, yr, y_ = np.empty(y.size), np.empty(y.size), np.empty(y.size)
-	zp, zr = np.empty(y.size), np.empty(y.size)
-	meanScore, i = 0., 1
-	for train, test in kf:
-		clf.fit(X[train,:],y[train])
-		yp[test] = clf.predict_proba(X[test,:])[:,1]
-		yr[test] = clf.predict(X[test,:])
-
-		clf.fit(Z[train,:],y[train],cutoff=40)
-		zp[test] = clf.predict_proba(Z[test,:])[:,1]
-		zr[test] = clf.predict(Z[test,:])
-
-		y_[test] = 0.6*yr[test]*(yp[test] > 0.5)
-		thisScore = scoreFunc(y[test],y_[test])
-		if verbose:
-			print "Error: %f (fold %d of %d)"%(thisScore,i,nFolds)
-			print "All Zeros Score: %f"%(scoreFunc(np.zeros(len(test)),y_[test]))
-		meanScore += thisScore
-		i += 1
-
-	yf = pd.DataFrame({'loss':y,'rgr':yr,'clf':yp,'rgr40':zr,'clf40':zp})
-	yf.to_csv('base4.csv')
-	return meanScore/nFolds
-
-
-
-def stratKFoldMany(X,y,clf,scoreFunc,nFolds=5,seed=1337,verbose=True):
-	""""""
-	kf = StratifiedKFold(y,n_folds=nFolds)
-	yp, yr, y_ = np.empty(y.size), np.empty(y.size), np.empty(y.size)
-	y10, y20, y40 = np.empty(y.size), np.empty(y.size), np.empty(y.size)
-	r10, r20, r40 = np.empty(y.size), np.empty(y.size), np.empty(y.size)
-	y10p = np.empty(y.size)
-	meanScore, i = 0., 1
-	for train, test in kf:
-		clf.fit(X[train,:],y[train],thresh=0.406667)
-		yp[test] = clf.predict_proba(X[test,:])[:,1]
-		yr[test] = clf.predict(X[test,:])
-
-		# Do the rest
-		clf.fit(X[train,:],y[train],thresh=0.406667,cutoff=10)
-		y10[test] = clf.predict_proba(X[test,:])[:,1]
-		r10[test] = clf.predict(X[test,:])
-		clf.clf.fit(X[train,:],(y[train] > 10) & (y[train] <= 20))
-		y10p[test] = clf.predict_proba(X[test,:])[:,1]
-
-		clf.fit(X[train,:],y[train],thresh=0.406667,cutoff=20)
-		y20[test] = clf.predict_proba(X[test,:])[:,1]
-		r20[test] = clf.predict(X[test,:])
-
-		clf.fit(X[train,:],y[train],thresh=0.406667,cutoff=60)
-		y40[test] = clf.predict_proba(X[test,:])[:,1]
-		r40[test] = clf.predict(X[test,:])
-
-		y_[test] = 0.6*yr[test]*(yp[test] > 0.5)
-		thisScore = scoreFunc(y[test],y_[test])
-		if verbose:
-			print "Error: %f (fold %d of %d)"%(thisScore,i,nFolds)
-			print "All Zeros Score: %f"%(scoreFunc(np.zeros(len(test)),y_[test]))
-		meanScore += thisScore
-		i += 1
-
-	yf = pd.DataFrame({'loss':y,'rgr':yr,'clf':yp,
-		'clf10':y10,'clf20':y20,'clf40':y40, 'clf10p':y10p,
-		'rgr10':r10,'rgr20':r20,'rgr40':r40})
-	yf.to_csv('base3.csv')
-	return meanScore/nFolds
-
-
 def holdout(X,y,rgr,fraction=0.2,nFolds=10,seed=1337,verbose=True):
 	""""""
 	meanScore = 0.
@@ -239,7 +182,7 @@ def holdout(X,y,rgr,fraction=0.2,nFolds=10,seed=1337,verbose=True):
 		rgr.fit(xTr,yTr)
 		y_ = rgr.predict(xCV)
 		y_[y_ < 0] = 0.
-		thisScore = mean_absolute_error(yCV,y_)
+		thisScore = mean_absolute_error(yCV[yCV >0],y_[yCV > 0])
 		meanScore += thisScore
 		if verbose:
 			print "Error: %f (fold %d of %d)"%(thisScore,i,nFolds)
@@ -287,12 +230,137 @@ def stratClassify(X,y,clf,scoreFunc,nFolds=10,fraction=0.2,seed=1337,verbose=Tru
 		print "All Zero Average Score: %f"%(allZero/nFolds)
 	return meanScore/nFolds
 
+def maxF1(t,p,minval=0,maxval=1,nThresh=4,maxIter=6):
+	""""""
+	thresh_ = np.linspace(minval,maxval,nThresh)
+	maxScore, iter_ = 0, 0
+	while iter_ < maxIter:
+		fs = [f1_score(t,1*(p > th)) for th in thresh_]
+		amax, tmax = np.argmax(fs), np.max(fs)
+		if tmax > maxScore:
+			maxScore = tmax
+		if tmax < maxScore:
+			break
+		minval, maxval = np.max([0,amax-1]),np.min([nThresh-1,amax+1])
+		nThresh *= 2
+		thresh_ = np.linspace(thresh_[minval],thresh_[maxval],nThresh)
+		iter_ += 1
+	print thresh_[amax]
+	return maxScore
+
+def maxMAE(t,p,r,minval=0,maxval=1,nThresh=4,maxIter=6):
+	""""""
+	thresh_ = np.linspace(minval,maxval,nThresh)
+	maxScore, iter_ = 1., 0
+	while iter_ < maxIter:
+		fs = [mean_absolute_error(t,r*(p > th)) for th in thresh_]
+		amax, tmax = np.argmin(fs), np.min(fs)
+		if tmax < maxScore:
+			maxScore = tmax
+		if tmax > maxScore:
+			break
+		minval, maxval = np.max([0,amax-1]),np.min([nThresh-1,amax+1])
+		nThresh *= 2
+		thresh_ = np.linspace(thresh_[minval],thresh_[maxval],nThresh)
+		iter_ += 1
+
+	print thresh_[amax]
+	return maxScore	
+
+def stratF1D(X,y,clf,nFolds=10,fraction=0.2,seed=1337,verbose=True):
+	""""""
+	meanScore = 0.
+	yTarget = 1*((y > 0))
+	sss = StratifiedShuffleSplit(yTarget,n_iter=nFolds,test_size=fraction,random_state=seed)
+	iter_ = 0
+	numThresh = 512
+	f1scores = np.empty((len(sss),numThresh))
+	for train, test in sss:
+		clf.fit(X[train,:],yTarget[train])
+		y_ = clf.decision_function(X[test,:])
+		f1scores[iter_,:] = maxF1(yTarget[test],y_,nThresh=numThresh)
+		thisScore = np.max(f1scores[iter_,:])
+		iter_ += 1
+		#fpr, tpr, thresh = roc_curve(yTarget[test],y_)
+		#thisScore = auc(fpr,tpr)
+		if verbose:
+			print "AUC: %f"%thisScore
+		meanScore += thisScore
+
+	#print meanScore/nFolds
+	flatScore = np.mean(f1scores,axis=0)
+	if verbose:
+		print "Best Score %f at Best Thresh: %f"%(np.max(flatScore),np.linspace(-1,1.,numThresh)[np.argmax(flatScore)])
+	return np.max(flatScore)
+
+
+
+def stratF1(X,y,clf,nFolds=10,fraction=0.2,seed=1337,verbose=True):
+	""""""
+	meanScore = 0.
+	yTarget = 1*((y > 0))
+	sss = StratifiedShuffleSplit(yTarget,n_iter=nFolds,test_size=fraction,random_state=seed)
+	iter_ = 0
+	numThresh = 512
+	f1scores = np.empty((len(sss),numThresh))
+	for train, test in sss:
+		clf.fit(X[train,:],yTarget[train])
+		y_ = clf.predict_proba(X[test,:])[:,1]
+		f1scores[iter_,:] = maxF1(yTarget[test],y_,nThresh=numThresh)
+		thisScore = np.max(f1scores[iter_,:])
+		iter_ += 1
+		#fpr, tpr, thresh = roc_curve(yTarget[test],y_)
+		#thisScore = auc(fpr,tpr)
+		if verbose:
+			print "AUC: %f"%thisScore
+		meanScore += thisScore
+
+	#print meanScore/nFolds
+	flatScore = np.mean(f1scores,axis=0)
+	if verbose:
+		print "Best Score %f at Best Thresh: %f"%(np.max(flatScore),np.linspace(-1,1.,numThresh)[np.argmax(flatScore)])
+	return np.max(flatScore)
+
+def stratKFoldF1(X,y,clf,frac=1.,baseAUC=None,nFolds=5,seed=1337,verbose=True):
+	""""""
+	kf = StratifiedKFold(y > 0,n_folds=nFolds)
+	yp, y_ = np.empty(y.size), np.empty(y.size)
+	np.random.seed(seed)
+	for train, test in kf:
+		i0, i1 = train[y[train] == 0], train[y[train] > 0]
+		numTrain = int(frac*len(i0))
+		np.random.shuffle(i0)
+		ind_ = np.concatenate((i0[:numTrain],i1))
+		clf.fit(X[ind_,:],y[ind_] > 0)
+		yp[test] = clf.decision_function(X[test,:])
+	
+	fpr, tpr, thresh = roc_curve(y>0,yp)
+	if baseAUC:
+		if np.abs(baseAUC - auc(fpr,tpr)) > 0.01:
+			return 0
+	return maxF1(y > 0,yp,minval=yp.min(),maxval=yp.max(),nThresh=6)
+
+def stratKFoldAUC(X,y,clf,frac=1.,nFolds=5,seed=1337,verbose=True):
+	""""""
+	kf = StratifiedKFold(y > 0,n_folds=nFolds)
+	yp, y_ = np.empty(y.size), np.empty(y.size)
+	np.random.seed(seed)
+	for train, test in kf:
+		i0, i1 = train[y[train] == 0], train[y[train] > 0]
+		np.random.shuffle(i0)
+		numTrain = int(frac*len(i0))
+		ind_ = np.concatenate((i0[:numTrain],i1))
+		clf.fit(X[ind_,:],y[ind_] > 3)
+		yp[test] = clf.decision_function(X[test,:])
+	
+	fpr, tpr, thresh = roc_curve(y>0,yp)
+	return auc(fpr,tpr)
+
 def stratAUC(X,y,clf,nFolds=10,fraction=0.2,seed=1337,verbose=True):
 	""""""
 	meanScore = 0.
-	yTarget = 1*((y > 40))
+	yTarget = 1*((y > 0))
 	sss = StratifiedShuffleSplit(yTarget,n_iter=nFolds,test_size=fraction,random_state=seed)
-
 	for train, test in sss:
 		clf.fit(X[train,:],yTarget[train])
 		y_ = clf.predict_proba(X[test,:])[:,1]
@@ -304,6 +372,21 @@ def stratAUC(X,y,clf,nFolds=10,fraction=0.2,seed=1337,verbose=True):
 
 	return meanScore/nFolds
 
+def stratAUCD(X,y,clf,nFolds=10,fraction=0.2,seed=1337,verbose=True):
+	""""""
+	meanScore = 0.
+	yTarget = 1*((y > 0))
+	sss = StratifiedShuffleSplit(yTarget,n_iter=nFolds,test_size=fraction,random_state=seed)
+	for train, test in sss:
+		clf.fit(X[train,:],yTarget[train])
+		y_ = clf.decision_function(X[test,:])
+		fpr, tpr, thresh = roc_curve(yTarget[test],y_)
+		thisScore = auc(fpr,tpr)
+		if verbose:
+			print "AUC: %f"%thisScore
+		meanScore += thisScore
+
+	return meanScore/nFolds
 
 def greedyReductionAUC(X,y,clf,fnames):
 	""""""
@@ -335,12 +418,43 @@ def greedyReductionAUC(X,y,clf,fnames):
 def featureScore(x):
 	""""""
 	X, y, clf = x
-	return stratAUC(X,y,clf,nFolds=5,verbose=False)
+	#return holdout(X,y,clf,nFolds=5,verbose=False)
+	#return stratF1D(X,y,clf,nFolds=5,verbose=False)
+	#return stratAUC(X,y,clf,nFolds=5,verbose=False)
+	#return stratKFoldF1(X,y,clf,baseAUC,verbose=False)
+	return stratKFoldAUC(X,y,clf,verbose=False)
+	r_ = stratKFoldR(X,y,clf,frac=0.1,nFolds=5)
+	return mean_absolute_error(y[y > 0],r_[y>0])
+
+def MultiGreedyMAE(X,y,clf,fnames):
+	pool = Pool(processes=4)
+
+	#bestFeats = [201, 767, 1, 268, 271, 520, 521] 
+	bestFeats = []
+	lastScore = 10
+	allFeats = [f for f in xrange(X.shape[1])]
+	#baseAUC = stratKFoldAUC(X[:,bestFeats],y,clf)
+	while True:
+		testFeatSets = [[f] + bestFeats for f in allFeats if f not in bestFeats]
+		args = [(X[:,fSet],y,clf) for fSet in testFeatSets]
+		scores = pool.map(featureScore,args)
+		(score, featureSet) = min(zip(scores,testFeatSets))
+		print featureSet
+		#baseAUC = stratKFoldAUC(X[:,featureSet],y,clf)
+		print "Max AUC: %f"%score
+		if score > lastScore:
+			break
+		lastScore = score
+		bestFeats = featureSet
+
+	pool.close()
+	return [fnames[i] for i in bestFeats]
 
 def MultiGreedyAUC(X,y,clf,fnames):
 	pool = Pool(processes=4)
 
-	bestFeats = [246,552,133,6, 87, 182, 183, 364, 401, 478, 481, 545, 553, 634] 
+	#bestFeats = [201, 767, 1, 268, 271, 520, 521] 
+	bestFeats = [520,521]
 	lastScore = 0
 	allFeats = [f for f in xrange(X.shape[1])]
 	while True:
@@ -349,12 +463,12 @@ def MultiGreedyAUC(X,y,clf,fnames):
 		scores = pool.map(featureScore,args)
 		(score, featureSet) = max(zip(scores,testFeatSets))
 		print featureSet
+		#baseAUC = stratKFoldAUC(X[:,featureSet],y,clf)
 		print "Max AUC: %f"%score
-		if score <= lastScore:
+		if score < lastScore:
 			break
 		lastScore = score
 		bestFeats = featureSet
 
 	pool.close()
-	return [fnames[i] for i in bestFeatures]
-
+	return [fnames[i] for i in bestFeats]

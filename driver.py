@@ -10,8 +10,8 @@ from sklearn.lda import LDA
 from sklearn.qda import QDA
 from sklearn.svm import LinearSVC, SVR
 from sklearn.decomposition import TruncatedSVD
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, RandomForestRegressor
-from sklearn.linear_model import Ridge, ElasticNet, Lasso, BayesianRidge
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, GradientBoostingRegressor
+from sklearn.linear_model import Ridge, ElasticNet, Lasso, BayesianRidge, LinearRegression
 import fileio as fio
 import ml
 reload(fio)
@@ -22,19 +22,36 @@ AUCONLY = False
 RFIMPORT = False
 GRIDSEARCH = False
 TRAINCV = False
-DECISION_THRESHOLD = 0.2
-SCALE_FACTOR = 0.7
+#DECISION_THRESHOLD = 0.0332681017613 #2.18651689492e-06
+DECISION_THRESHOLD = 0.051846234761
+SCALE_FACTOR = 0.85
 
 def main():
 	""""""
+	hdr = [t for t in open('../data/train_v2.csv','r').readline().split('\n')[0].split(',') if t not in ['loss','id']]
+	if False:
+		hdr = [t for t in open('../data/train_v2.csv','r').readline().split('\n')[0].split(',') if t not in ['loss','id']]
+		f = fio.fileio()
+		X = f.loadNumericTrain(usecols=hdr)
+		y = f.loadLabels().loss.values
+		clf = LDA()
+		#clf = Ridge()
+		feats = ml.MultiGreedyAUC(X,y,clf,hdr)
+		print feats
+		return
+
 	# open up file containing the columns we wish to use
 	f = fio.fileio()
+	fz = fio.fileio()
 	st = time.time()
 	uf = pd.read_csv('featsGBM.txt').feature.values[:145]
 	numcols = [u for u in uf if u != 'fLast']#list(uf[1:])
 	X = f.loadNumericTrain(usecols=numcols)
-	#numcols = ['f527','f528']
-	#Z = f.loadNumericTrain(usecols=numcols)
+	#xcols = ['f2','f271','f274','f527','f528','f204','f777','f278','f210','f724']
+	zcols = ['f621', 'f403', 'f535', 'f367', 'f135', 'f333', 'f727', 'f2', 'f271', 'f527', 'f528']
+	#zcols = ['f2','f271','f527','f528']
+	Z = fz.loadNumericTrain(usecols=zcols)
+
 	y = f.loadLabels().loss.values
 	print "Training data took %f seconds to load" %(time.time() - st)
 	
@@ -57,56 +74,40 @@ def main():
 		return
 	
 	clf = LDA()
-	rgr = Ridge()
-	lr = ml.Cascaded(clf,rgr)
-
-	if GRIDSEARCH:
-		thresholds = np.linspace(0.1,.15,16)
-		thresholds2 = np.linspace(0.2,1,4)
-		bestScore, bestScale, bestDec = 1., 1., 1.
-		for t1 in thresholds2:
-			for t2 in thresholds: 
-				score = ml.stratHoldoutMix(X,Z,y,lr,mean_absolute_error,
-					scaleFactor=t1,decisionThreshold=t2,nFolds=NUMFOLDS,verbose=False)
-				print "This Score: %f, Scale: %f, Decision: %f"%(score,t1,t2)
-				if score < bestScore:
-					print "Best Score: %f, Scale: %f, Decision: %f"%(score,t1,t2)
-					bestScale, bestDec = t1, t2
-					bestScore = score
-		print "Score: %f, Scale: %f, Decision: %f"%(bestScore,bestScale,bestDec)
-		return
-
+	rgr = Lasso(alpha=0.09)
+	rgr = GradientBoostingRegressor(**ml.INIT_PARAMS['GradientBoostingRegressor'])
 	if TRAINCV:
 		st = time.time()
-	
-		print "Average Error: %f"%ml.stratHoldout(X,y,lr,mean_absolute_error,nFolds=NUMFOLDS,
-			scaleFactor=SCALE_FACTOR,decisionThreshold=DECISION_THRESHOLD)
-		
-		#print "Average Error: %f"%ml.stratKFold(X,y,lr,mean_absolute_error,nFolds=NUMFOLDS)
+
+		print "Average Error: %f"%ml.stratHoldout2Stage(X,Z,y,clf,rgr,nFolds=NUMFOLDS,scaleFactor=SCALE_FACTOR)
 		print "%d-Fold CV took %f seconds"%(NUMFOLDS,time.time() - st)
 		return
 
 	# Load the test data	
 	Xtest = f.loadNumericTest(usecols=numcols)
+	Ztest = fz.loadNumericTest(usecols=zcols)
 
+	#clf = LDA()
+	#rgr = Ridge()
 	# Fit the data
-	lr.fit(X,y,thresh=0.15)
+	clf.fit(Z,y > 3)
+	yp = clf.predict_proba(Ztest)[:,1]
+	zp = clf.predict_proba(Z)[:,1]
+
+	print Z.shape, Ztest.shape
+	rgr.fit(X[zp > DECISION_THRESHOLD,:],y[zp > DECISION_THRESHOLD])
+	print X.shape, Xtest.shape
+	yr = rgr.predict(Xtest)
+	yr[yr < 0] = 0
+	yr[yr > 100] = 100.
 	print "Training took %f seconds"%(time.time() - st)
 
 	sub_ = pd.read_csv('../data/sampleSubmission.csv')
-	st = time.time()
-	yp = lr.predict_proba(Xtest)[:,1]
-	print "predict_proba took %f seconds"%(time.time() - st)
-
-	st = time.time()
-	yr = lr.rgr.predict(Xtest)
-	print "predict took %f seconds"%(time.time() - st)
-
 	sub_.loss = SCALE_FACTOR*yr*(yp > DECISION_THRESHOLD)
 	sub_.loss[sub_.loss < 0] = 0.
 
 	# Write to file
-	sub_.to_csv('../data/subs/sub02182014.csv',index=False)
+	sub_.to_csv('../data/subs/sub03022014_4.csv',index=False)
 
 if __name__ == "__main__":
 	main()
