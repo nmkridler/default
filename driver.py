@@ -123,7 +123,7 @@ def lgd(numfolds=5,threshold=0.5,featsfile='featsGBM.txt'):
 
 def main():
 	# Run the classifier
-	#classifier(**CPARAMS)
+	classifier(**CPARAMS)
 
 	# Run the regressor
 	lgd(**LPARAMS)
