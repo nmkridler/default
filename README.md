@@ -11,7 +11,8 @@ Scripts for Kaggle Imperial Loan Default Prediction Contest
 : folder containing repo code
 * __data__
 : contains train_v2.csv, test_v2.csv, and sampleSubmission.csv  
-  * __subs__: folder to hold submissions
+  * __subs__: folder to hold submissions containing  
+  * __train/test__ subfolders in the __subs__ directory
 
 ##### File descriptions
 * __driver.py__
